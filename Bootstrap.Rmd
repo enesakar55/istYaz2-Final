@@ -1,0 +1,310 @@
+---
+title: "Bootstrap Yeniden Örnekleme"
+author: "Erdem Cankut-Enes Akar-Fatih Ekici-Tolunay Türitcioğlu"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 6
+    toc_float: true
+    theme: readable
+    highliht: tango
+    df_print: paged
+    code_folding: show
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# TidyTuesday Bira Üretim Verileriyle Bootstrap Yeniden Örnekleme
+
+# Giriş
+
+Bilişimde süregelen devrimin istatistikler üzerinde bir etkisi var. Daha fazla grafik ve hesaplama otomatikleştirildikçe verilerin keşifsel analizi daha kolay hale geliyor. Çok büyük ve çok karmaşık veri kümelerinde istatistiksel çalışmalar yapmak  artık mümkündür.
+
+İstatistiksel çıkarım, örneklem istatistiklerin örnekleme dağılımlarına dayanmaktadır. Bir örnekleme dağılımı, popülasyondan birçok rastgele örnekleme dayanmaktadır. Bootstrap, örnekleme dağılımını, en azından yaklaşık olarak, yeniden örnekleme yöntemiyle sadece bir örneklemden alınan yeni örneklemler ile bulmanın bir yoludur.
+
+Bradley Efron bunu ilk kez 1979'da bu makalede tanıttı.Bootstrap, örnek verilerin değiştirilmesi ile örneklemeye dayanır. Bu teknik, herhangi bir istatistiğin standart hatasını tahmin etmek ve bunun için bir güven aralığı (CI) elde etmek için kullanılabilir. Bootstrap özellikle Confidence Interval'nin kapalı bir formu olmadığında veya çok karmaşık bir formda olduğunda yararlıdır.
+
+Orijinal veri setinden rastgele bir n gözlem örneği seçmekten oluşur. Daha sonra modeli değerlendirmek için bootstrap veri kümesi adı verilen bu alt küme kullanılır.Bu prosedür çok sayıda tekrarlanır ve daha sonra bootstrap tahmininin standart hatası hesaplanır. Sonuçlar, modellerin performansındaki varyansın bir göstergesidir.Örneklemenin değiştirme ile yapıldığına dikkat edin, bu da aynı gözlemin önyükleme veri kümesinde birden fazla kez olabileceği anlamına gelir.
+
+Bu çalışmadaki amacımız model parametrelerini tahmin etmek için **bootstrap yeniden örneklemenin** nasıl kullanılacağını göstermektir.Buradaki modelleme hedefimiz ,TidyTuesday veri kümesine göre şeker bira üreticilerinin malta göre ne kadar kullandığını tahmin etmektir.Bunu yapmak için bootstrap yeniden örnekleme kullanacağız
+
+
+# Kullanılacak Kütüphaneler
+
+```{r message=FALSE, warning=FALSE}
+library(knitr)
+library(tidyverse)
+library(tidyr)
+library(lubridate)
+library(janitor)
+library(tidymodels)
+library(gridExtra)
+library(ggplot2)
+library(plotly)
+library(gapminder)
+library(gganimate)
+```
+
+# Verinin Tanıtılması 
+
+Bira Üretim verisi Alkol ve Tütün Vergisi ve Ticaret Bürosu'ndan (TTB) geliyor.Veri Seti 1440 gözlem ve 9 değişkneden oluşmaktadır.Bira üretim verisi için değişkenler aşağıdaki gibidir.
+
+**Değişkenler;**
+
+* **data_type**
+
+* **material_type :** Tahıl ürünü, Toplamlar, Tahıl Dışı Ürün (temel olarak tahıllara karşı tahıllar)
+
+* **year :** Yıl
+
+* **month :** Ay
+
+* **type :** Malzeme türünden gerçek satır öğesi.
+
+* **month_current** : Bu yıl / ay için mevcut varil sayısı
+
+* **month_prior_year :** Aynı ay için önceki yıl varil sayısı
+
+* **ytd_current :** Cari yılın kümülatif yılı
+
+* **ytd_prior_year :** Önceki yıl için kümülatif yıl
+
+
+```{r message=FALSE}
+brewing_materials <- readr::read_csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2020/2020-03-31/brewing_materials.csv')
+```
+
+```{r}
+brewing_materials
+```
+
+
+# Veri Manipülasyonu
+
+```{r}
+breawing_filtered<-brewing_materials %>% 
+  filter(type %in% c("Malt and malt products","Sugar and syrups",
+                     "Hops (dry)"),
+         year<2016,
+month !=12) %>% 
+ mutate(date=paste0(year,"-",month,"-01"),
+                             date=lubridate::ymd(date))
+
+```
+
+**Burada yaptığımız işlem ana veri kümesinden "Malt and malt products","Sugar and syrups","Hops (dry)" farklı bira demleme malzemlerininin 2016 yılından önceki gözlemleri aldık ve yeni bir değişken olarak date (tarih) değişkenini yıl/ay/gün olacak şekilde veriye ekledik.**
+
+
+```{r}
+breawing_filtered
+```
+
+
+**Bazı farklı bira malzemeleri zamanla nasıl değiştini inceleyelim**
+```{r}
+ggplotly(ggplot(breawing_filtered,aes(date,month_current))+
+             geom_point(aes(color=type))+
+             ggtitle("Date - Month Current")+
+             xlab("Date")+
+             ylab("Month Current"))
+```
+
+```{r}
+ggplot(breawing_filtered, aes(date,month_current)) +
+  geom_point(size = 6,aes(color=type))+
+  labs(title = 'Date: {frame_time}', x = 'Date', y = 'Month Current') +
+  transition_time(date)
+```
+
+
+**Veriyi analize hazır bir hale getirebildik sayılır devam edelim.**
+```{r}
+breawing_filtered %>% 
+  select(date,type,month_current)
+```
+**Veriden date,type,mont_current değişkenlerini seçildi**
+
+
+```{r}
+breawing_filtered %>% select(date,type,month_current) %>% 
+  pivot_wider(names_from = type,
+              values_from=month_current)
+```
+**Seçilen değişkenler type(malzeme türü) değişkenine göre pivotlandı(sütunlara ayrıldı) ve malzeme türlerinin sahip oldukları month_current(Bu yıl / ay için mevcut varil sayısı) değişkeni değerleri ile birleştirildi.**
+
+
+```{r}
+brewing_materials<-breawing_filtered %>% select(date,type,month_current) %>% 
+  pivot_wider(names_from = type,
+              values_from=month_current) %>%
+  janitor::clean_names() 
+```
+**Bir data.frame döndürülerek değişken adları temizlendi**
+
+
+```{r}
+brewing_materials
+```
+
+
+**"malt_and_malt_products","sugar_and_syrups","hops_dry" bira üretim malzemlerininin yıllara göre farklı kalıplarda/desenlerde olduğu grafikten söyleyebilriz.Bira üreticilerinin maltlara göre ne kadar şeker kullandığını ölçmek istiyoruz.**
+
+```{r message=FALSE}
+ggplotly(ggplot(brewing_materials,aes(malt_and_malt_products,sugar_and_syrups))+
+           geom_point(color ="orange")+
+           ggtitle("Malt ve Malt Ürünleri - Şeker ve Şuruplar")+
+           xlab("Malt ve Malt Ürünleri")+
+           ylab("Şeker ve Şuruplar"))
+```
+
+
+
+
+**Bira üreticileri daha fazla malt kullanıyor ise bir nevi daha fazla şeker kullanıyorlar.Bu lineer durumu ve aralığı gösterebilmek adına lineer regresyon aralığını grafiğie ekleyelim.**
+
+```{r message=FALSE}
+ggplotly(ggplot(brewing_materials,aes(malt_and_malt_products,sugar_and_syrups))+
+           geom_point(color="orange")+
+           geom_smooth(method="lm")+
+           ggtitle("Malt ve Malt Ürünleri - Şeker ve Şuruplar")+
+           xlab("Malt ve Malt Ürünleri")+
+           ylab("Şeker ve Şuruplar"))
+```
+
+
+# Lineer Regresyon Modeli
+
+Bootstrap regresyonu, parametrik varsayımların geçersizliğinden etkilenmemektedir. Örneğin, basit doğrusal regresyonda bir Bootstrap algoritması aşağıdaki gibi hesaplanmaktadır: Öncelikle Xi ve Yi değişkenleri için n sayıda gözlemden oluşan bir örnek seti elde edilmektedir. Gözlemlerin yer değiştirmesiyle n adet gözlem yeniden örneklenmektedir. Yeni gözlem çifti (X* ij) , (Y* ij ) (i=1,...n; j=1,...B) olacaktır. En küçük kareler yöntemi kullanılarak ( b*oj ) ve (b*1j) tahminleyicileri hesaplanmaktadır. Yeniden örnekleme, yeni gözlem çiftlerinin elde edilmesi ve regresyon katsayılarının tahminlenmesi işlemleri bir çok kez tekrarlanmaktadır. Örneğin 1000 kez bu basamaklar tekrarlandığında β 0 ve β1 için 1000 adet Bootstrap tahmini elde edilecektir. Bu tahminlerin ortalaması alınarak b0 ve b1  elde edilmektedir. Elde edilen bu tahminler Bootstrap regresyon tahminleridi
+
+**Bira üreticileri daha fazla malt kullandıklarında daha fazla şeker kullanıyorlar.Şeker kullanımı bağımlı değişken ve mal ve malt ürünleri bağımsız değişken olmak üzere lineer regresyon modelini kuralım.**
+
+
+```{r}
+beer_fit<-lm(sugar_and_syrups~ 0 + malt_and_malt_products,data=brewing_materials)
+```
+
+```{r}
+summary(beer_fit)
+```
+```{r}
+qf(0.95,1,87)
+```
+
+
+**F1,87,0.05 = 3.950587 olduğundan Fh = 3665 > 3.950587 veya p-değeri  <  0.05 olduğundan H0 : β1 = 0 hipotezi reddedilir yani oluşturulan regresyon modeli anlamlıdır.**
+
+
+```{r}
+tidy(beer_fit)
+```
+
+**Burada, malt-şeker ilişkisinin basitleştirilmiş bir görünümünü elde etmek için kesişmeyi sıfıra ayarlamayı seçiyoruz (yani, bira üreticileri malt kullanmıyorla ise şeker de kullanmıyorlar).Başka bir deyişle orjinden geçen basit doğrusal regresyon mdelini kuruyoruz. Bu durumu serbest bırakabiliriz hem beta_0 hem de beta_1 katsayısını tahmin edebiliriz.**
+
+
+**Bootstrap yeniden örnekleme, daha sağlam tahminler ve güven aralıkları sağlar.Modelin estimate değerini en küçük kareler yöntemi ile bulabiliriz.Fakat bu değeri bulabilmenin daha farklı bir yolu olan bootstrapp metodunu inceleyeceğiz. Artık bootstrap ile güven aralığı oluşturmaya başlayabiliriz.**
+
+
+# Bootstrap Sampling
+
+**İlk olarak, bir dizi bootstrap örneği oluşturalım.**
+```{r}
+beer_boot<-bootstraps(brewing_materials,
+           times = 1000,
+           apparent = TRUE)
+beer_boot
+```
+
+
+**Ardından,bootstrap örneklerinin her birine bir lineer model geliştirelim.Bu sayede estimate değerleri için gelebilecek aralıkları görelim.Model sonuçlarının bir veri çerçevesini oluşturmak için map () ile tidy () öğesini kullanabiliriz.**
+
+```{r}
+beer_models<-beer_boot %>% 
+  mutate(model = map(splits,~lm(sugar_and_syrups ~ 0 + malt_and_malt_products,
+                   data=.)),
+         coef_info=map(model,tidy))
+```
+
+
+```{r}
+beer_coefs<-beer_models %>% unnest(coef_info)
+beer_coefs
+```
+
+
+**Veride estimate değerleri ile alakalı bootstrap ile  bu şekilde bir aralık oluşturmak ve bunun üzerine yorum yapmak varsayımlarla hareket etmekten daha güçlü bir sonuç verir.Veriyi 1000 kez tekrarlayarak bir nevi kitleyi simule etmiş olduk. Ve daha güçlü bir tahmin elde ettik.**
+
+
+
+
+# Sonuçların Değerlendirilmesi
+
+## Örneklem Dağılımı
+
+**Bootstrap yeniden örnekleme ile elde ettiğimiz tahmin değerlerinin başka bir deyişle örnekleme dağılımını inceleyelim.**
+
+```{r message=FALSE}
+ggplotly(ggplot(beer_coefs,aes(estimate))+
+  geom_histogram(alpha=0.7, fill = "cyan3")+
+    ggtitle("Fistogram of Estimates")+
+    xlab("Estimate")+
+    ylab("Count"))
+```
+
+
+
+**Daha önceden bahsetmiş olduğumuz örneklem histogramı ortaya çıktı.Bu dağılımın nerede merkezlendiğini  ve bu görselleştirmeden ne kadar geniş olduğunu görebiliriz.Bu örneklem historamı tahmin parametresinin hangi aralıklta olabileceğine ilişkin bir aralıktır. Şimdi bir güven aralığı oluşturalım. Rsample paketi içersinde bunu yapabilmemizi sağlayan int_pctl() biçiminde basit bir komut bulunmaktadır**
+
+
+
+## Güven Aralıkları 
+
+Genel olarak herhangi bir θ parametresi için güven aralığı, θ parametresinin nokta tahmininden daha fazla bilgi vermektedir. Güven aralıklarının oluşturulmasında çeşitli Bootstrap metodları önerilmektedir.
+
+Klasik Bootstrap Metodu ile yaklaşık güven aralıklarının oluşturulmasında Bootstrap dağılışının örnek persentilleri kullanılmaktadır. B Bootstrap örnek sayısı ve , tahminleyicisi olmak üzere sıralanmış değerler, gibidir. Bootstrap güven aralığı, bootstrap sapmanın ve bootstrap standart hatanın tahminlemesine dayanmaktadır. 
+
+
+**Yüzde 99 güven ile tahmin değerine ilişkin bir güven aralığı oluşturduk.**
+```{r}
+int_pctl(beer_models, coef_info,alpha = 0.01)
+```
+
+## Görselleştirme
+
+Ayrıca bu tahmin modellerinden bazılarını bootstrap örneklerine göre görselleştirebiliriz.İlk olarak, yeniden örneklenen her veri noktası için uygun değerleri almak üzere augment () yöntemini kullanalım.
+
+
+```{r}
+beer_aug <- beer_models %>%
+  sample_n(200) %>%
+  mutate(augmented = map(model, augment)) %>%
+  unnest(augmented)
+
+beer_aug
+```
+
+
+```{r warning=FALSE}
+ggplotly(ggplot(beer_aug, aes(malt_and_malt_products, sugar_and_syrups)) +
+  geom_line(aes(y = .fitted, group = id), alpha = .2, col = "cyan3") +
+  geom_point())
+```
+
+
+```{r}
+lm_plot<-brewing_materials %>% ggplot(aes(malt_and_malt_products,sugar_and_syrups))+
+  geom_point(color="orange")+geom_smooth(method="lm")
+
+bootstrapLm<-ggplot(beer_aug, aes(malt_and_malt_products, sugar_and_syrups)) +
+  geom_line(aes(y = .fitted, group = id), alpha = .1, col = "cyan3") +
+  geom_point(color="orange")
+
+grid.arrange(bootstrapLm,lm_plot,nrow=1)
+
+```
+
+
+
+
